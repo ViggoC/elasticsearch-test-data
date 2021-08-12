@@ -9,7 +9,8 @@ import logging
 import random
 import string
 import uuid
-import datetime
+from datetime import datetime
+from datetime import timedelta
 
 import tornado.gen
 import tornado.httpclient
@@ -114,7 +115,7 @@ def get_data_for_format(format):
         min = now - 30 * per_day if len(split_f) < 3 else int(split_f[2])
         max = now + 30 * per_day if len(split_f) < 4 else int(split_f[3])
         ts = generate_count(min, max)
-        return_val = int(ts * 1000) if field_type == "ts" else datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S.000-0000")
+        return_val = int(ts * 1000) if field_type == "ts" else datetime.fromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S.000-0000")
 
     elif field_type == "words":
         min = 2 if len(split_f) < 3 else int(split_f[2])
@@ -177,11 +178,11 @@ def generate_random_doc(format):
     return res
 
 
-def set_index_refresh(val):
+def set_index_refresh(val, index_name):
 
     params = {"index": {"refresh_interval": val}}
     body = json.dumps(params)
-    url = "%s/%s/_settings" % (tornado.options.options.es_url, tornado.options.options.index_name)
+    url = "%s/%s/_settings" % (tornado.options.options.es_url, index_name)
     try:
         request = tornado.httpclient.HTTPRequest(url, headers=headers, method="PUT", body=body, request_timeout=240, auth_username=tornado.options.options.username, auth_password=tornado.options.options.password, validate_cert=tornado.options.options.validate_cert)
         http_client = tornado.httpclient.HTTPClient()
@@ -192,14 +193,14 @@ def set_index_refresh(val):
 
 
 @tornado.gen.coroutine
-def generate_test_data():
+def generate_test_data(index_name):
 
     global upload_data_count
 
     if tornado.options.options.force_init_index:
-        delete_index(tornado.options.options.index_name)
+        delete_index(index_name)
 
-    create_index(tornado.options.options.index_name)
+    create_index(index_name)
 
     # todo: query what refresh is set to, then restore later
     if tornado.options.options.set_refresh:
@@ -233,7 +234,7 @@ def generate_test_data():
         if out_file:
             out_file.write("%s\n" % json.dumps(item))
 
-        cmd = {'index': {'_index': tornado.options.options.index_name,
+        cmd = {'index': {'_index': index_name,
                          '_type': tornado.options.options.index_type}}
         if '_id' in item:
             cmd['index']['_id'] = item['_id']
@@ -279,6 +280,18 @@ if __name__ == '__main__':
     tornado.options.define("username", type=str, default=None, help="Username for elasticsearch")
     tornado.options.define("password", type=str, default=None, help="Password for elasticsearch")
     tornado.options.define("validate_cert", type=bool, default=True, help="SSL validate_cert for requests. Use false for self-signed certificates.")
+    tornado.options.define("time_series", type=str, default=None, help="""Create time series index. 
+                                Require a string seperated by comma like: '%Y.%m.%d,2021.01.01,5',
+                                the first part is time format, the second part is start date, the third 
+                                part define days from start date.""")
     tornado.options.parse_command_line()
 
-    tornado.ioloop.IOLoop.instance().run_sync(generate_test_data)
+    if tornado.options.options.time_series:
+        format, str_date, span = tornado.options.options.time_series.replace(' ', '').split(',')
+        start_date = datetime.strptime(str_date, format)
+        for i in range(int(span)):
+            date = (start_date + timedelta(days=i)).strftime(format)
+            index_name = tornado.options.options.index_name + '-' + date
+            tornado.ioloop.IOLoop.instance().run_sync(index_name)
+    else:
+        tornado.ioloop.IOLoop.instance().run_sync(tornado.options.options.index_name)
